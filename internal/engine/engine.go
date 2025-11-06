@@ -1,0 +1,238 @@
+package engine
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/budyaya/resty-stress-tester/internal/config"
+	"github.com/budyaya/resty-stress-tester/internal/parser"
+	"github.com/budyaya/resty-stress-tester/internal/reporter"
+	"github.com/budyaya/resty-stress-tester/internal/util"
+	"github.com/budyaya/resty-stress-tester/pkg/types"
+	"github.com/go-resty/resty/v2"
+)
+
+// StressEngine 压测引擎
+type StressEngine struct {
+	config     *config.Config
+	client     *resty.Client
+	csvParser  *parser.CSVParser
+	tmplParser *parser.TemplateParser
+	reporter   *reporter.StressReporter
+	logger     *util.Logger
+	result     *types.StressResult
+	workers    []*Worker
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	startTime  time.Time
+}
+
+// NewStressEngine 创建压测引擎
+func NewStressEngine(cfg *config.Config) (*StressEngine, error) {
+	// 创建 HTTP 客户端
+	client := resty.New()
+	client.SetTimeout(cfg.Timeout)
+
+	if !cfg.KeepAlive {
+		client.SetCloseConnection(true)
+	}
+
+	// 配置 TLS
+	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+
+	// 设置重试策略
+	client.SetRetryCount(0)
+
+	// 创建 CSV 解析器
+	var csvParser *parser.CSVParser
+	if cfg.CSVFile != "" {
+		var err error
+		csvParser, err = parser.NewCSVParser(cfg.CSVFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CSV parser: %v", err)
+		}
+	}
+
+	// 创建模板解析器
+	tmplParser := parser.NewTemplateParser(csvParser)
+
+	// 创建日志记录器
+	logger, err := util.NewLogger(cfg.Verbose, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %v", err)
+	}
+
+	// 创建报告生成器
+	reporter := reporter.NewReporter(cfg)
+
+	// 创建上下文
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &StressEngine{
+		config:     cfg,
+		client:     client,
+		csvParser:  csvParser,
+		tmplParser: tmplParser,
+		reporter:   reporter,
+		logger:     logger,
+		result:     types.NewStressResult(),
+		ctx:        ctx,
+		cancel:     cancel,
+		workers:    make([]*Worker, 0, cfg.Concurrency),
+	}, nil
+}
+
+// Run 运行压测
+func (e *StressEngine) Run() *types.StressResult {
+	e.logger.Info("Starting stress test...")
+	e.logger.Info("URL: %s", e.config.URL)
+	e.logger.Info("Method: %s", e.config.Method)
+	e.logger.Info("Concurrency: %d", e.config.Concurrency)
+
+	if e.config.IsDurationBased() {
+		e.logger.Info("Duration: %v", e.config.Duration)
+	} else {
+		e.logger.Info("Total Requests: %d", e.config.TotalRequests)
+	}
+
+	if e.csvParser != nil {
+		e.logger.Info("CSV Data Rows: %d", e.csvParser.RowCount())
+	}
+
+	e.startTime = time.Now()
+	e.result.StartTime = e.startTime
+
+	// 启动工作协程
+	e.startWorkers()
+
+	// 启动进度监控
+	if e.config.Verbose {
+		go e.monitorProgress()
+	}
+
+	// 等待测试完成
+	e.waitForCompletion()
+
+	e.result.EndTime = time.Now()
+	e.result.CalculateMetrics()
+
+	e.logger.Info("Stress test completed")
+
+	return e.result
+}
+
+// startWorkers 启动工作协程
+func (e *StressEngine) startWorkers() {
+	requests := make(chan struct{}, e.config.Concurrency)
+
+	// 创建工作协程
+	for i := 0; i < e.config.Concurrency; i++ {
+		worker := NewWorker(e.config, e.client, e.csvParser, e.tmplParser, e.result, e.ctx)
+		e.workers = append(e.workers, worker)
+
+		e.wg.Add(1)
+		go func(w *Worker) {
+			defer e.wg.Done()
+			w.Run(requests)
+		}(worker)
+	}
+
+	// 发送请求任务
+	go e.sendRequests(requests)
+}
+
+// sendRequests 发送请求任务
+func (e *StressEngine) sendRequests(requests chan<- struct{}) {
+	defer close(requests)
+
+	if e.config.IsDurationBased() {
+		// 基于时间的测试
+		timer := time.NewTimer(e.config.Duration)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-timer.C:
+				return
+			case <-e.ctx.Done():
+				return
+			default:
+				select {
+				case requests <- struct{}{}:
+				case <-e.ctx.Done():
+					return
+				}
+			}
+		}
+	} else {
+		// 基于请求数量的测试
+		for i := 0; i < e.config.TotalRequests; i++ {
+			select {
+			case requests <- struct{}{}:
+			case <-e.ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// waitForCompletion 等待测试完成
+func (e *StressEngine) waitForCompletion() {
+	e.wg.Wait()
+}
+
+// monitorProgress 监控进度
+func (e *StressEngine) monitorProgress() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			current := atomic.LoadInt64(&e.result.TotalRequests)
+			elapsed := time.Since(e.startTime)
+
+			if e.config.IsDurationBased() {
+				remaining := e.config.Duration - elapsed
+				rps := float64(current) / elapsed.Seconds()
+				e.logger.Progress(current, 0, e.startTime)
+				e.logger.Debug("Elapsed: %v, Remaining: %v, RPS: %.1f",
+					elapsed.Round(time.Second), remaining.Round(time.Second), rps)
+			} else {
+				total := int64(e.config.TotalRequests)
+				e.logger.Progress(current, total, e.startTime)
+			}
+
+		case <-e.ctx.Done():
+			return
+		}
+	}
+}
+
+// Stop 停止压测
+func (e *StressEngine) Stop() {
+	e.logger.Info("Stopping stress test...")
+	if e.cancel != nil {
+		e.cancel()
+	}
+}
+
+// GenerateReport 生成报告
+func (e *StressEngine) GenerateReport() error {
+	return e.reporter.GenerateReport(e.result)
+}
+
+// PrintReport 打印报告
+func (e *StressEngine) PrintReport() {
+	e.reporter.ConsoleReport(e.result)
+}
+
+// Cleanup 清理资源
+func (e *StressEngine) Cleanup() {
+	e.logger.Close()
+}

@@ -1,0 +1,6 @@
+id,username,email,role,token,department,salary,is_active
+101,john_doe,john@company.com,developer,token_john_101,engineering,75000,true
+102,jane_smith,jane@company.com,manager,token_jane_102,marketing,85000,true
+103,bob_wilson,bob@company.com,analyst,token_bob_103,finance,65000,false
+104,alice_brown,alice@company.com,director,token_alice_104,executive,120000,true
+105,charlie_lee,charlie@company.com,intern,token_charlie_105,engineering,45000,true

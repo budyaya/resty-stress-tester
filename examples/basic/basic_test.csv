@@ -1,0 +1,6 @@
+user_id,username,email,category
+1,user1,user1@example.com,premium
+2,user2,user2@example.com,standard
+3,user3,user3@example.com,premium
+4,user4,user4@example.com,standard
+5,user5,user5@example.com,vip

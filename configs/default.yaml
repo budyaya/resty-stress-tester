@@ -1,0 +1,21 @@
+# 默认压测配置
+method: "GET"
+total_requests: 1000
+concurrency: 10
+timeout: 30s
+keep_alive: true
+report_format: "console"
+verbose: false
+
+# HTTP 客户端配置
+client:
+  timeout: 30s
+  retry_count: 0
+  retry_wait_time: 1s
+  retry_max_wait_time: 10s
+  
+# 报告配置
+report:
+  include_details: false
+  max_errors_display: 10
+  output_format: "console"
