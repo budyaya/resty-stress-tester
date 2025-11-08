@@ -65,6 +65,7 @@ func LoadFromFlags() (*Config, error) {
 
 	// 如果指定了配置文件，从文件加载
 	if cfg.configFile != "" {
+		fmt.Printf("Config File:  %s\n", cfg.configFile)
 		if err := cfg.loadFromFile(); err != nil {
 			return nil, fmt.Errorf("failed to load config file: %v", err)
 		}
