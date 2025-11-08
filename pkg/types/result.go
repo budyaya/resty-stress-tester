@@ -1,6 +1,7 @@
 package types
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,11 @@ type StressResult struct {
 	MinResponseTime   time.Duration `json:"min_response_time"`
 	MaxResponseTime   time.Duration `json:"max_response_time"`
 	TotalResponseTime int64         `json:"-"` // 用于计算平均值
+
+	// 分位数统计 - 新增字段
+	P50ResponseTime time.Duration `json:"p50_response_time"`
+	P90ResponseTime time.Duration `json:"p90_response_time"`
+	P99ResponseTime time.Duration `json:"p99_response_time"`
 
 	// 分布统计
 	StatusCodes sync.Map `json:"status_codes"`
@@ -95,6 +101,56 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 // CalculateMetrics 计算最终指标
 func (sr *StressResult) CalculateMetrics() {
 	sr.TotalDuration = sr.EndTime.Sub(sr.StartTime)
+
+	// 计算分位数 - 新增功能
+	sr.calculatePercentiles()
+}
+
+// calculatePercentiles 计算响应时间分位数 - 新增方法
+func (sr *StressResult) calculatePercentiles() {
+	if len(sr.DetailedResults) == 0 {
+		return
+	}
+
+	// 提取所有成功的响应时间
+	var responseTimes []time.Duration
+	for _, result := range sr.DetailedResults {
+		if result.Success {
+			responseTimes = append(responseTimes, result.Duration)
+		}
+	}
+
+	if len(responseTimes) == 0 {
+		return
+	}
+
+	// 排序响应时间
+	sort.Slice(responseTimes, func(i, j int) bool {
+		return responseTimes[i] < responseTimes[j]
+	})
+
+	// 计算分位数
+	sr.P50ResponseTime = calculatePercentile(responseTimes, 0.50)
+	sr.P90ResponseTime = calculatePercentile(responseTimes, 0.90)
+	sr.P99ResponseTime = calculatePercentile(responseTimes, 0.99)
+}
+
+// calculatePercentile 计算分位数 - 新增函数
+func calculatePercentile(sortedData []time.Duration, percentile float64) time.Duration {
+	if len(sortedData) == 0 {
+		return 0
+	}
+
+	index := percentile * float64(len(sortedData)-1)
+	lower := int(index)
+	upper := lower + 1
+
+	if upper >= len(sortedData) {
+		return sortedData[lower]
+	}
+
+	weight := index - float64(lower)
+	return time.Duration(float64(sortedData[lower])*(1-weight) + float64(sortedData[upper])*weight)
 }
 
 // ShouldFail 根据错误率决定是否应该失败

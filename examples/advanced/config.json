@@ -1,0 +1,17 @@
+{
+  "url": "https://api.example.com/users/{{user_id}}",
+  "method": "GET",
+  "total_requests": 5000,
+  "concurrency": 50,
+  "timeout": "30s",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer token_{{user_id}}",
+    "X-User-Id": "{{user_id}}",
+    "X-Category": "{{category}}"
+  },
+  "csv_file": "users.csv",
+  "output_file": "results.json",
+  "report_format": "json",
+  "verbose": true
+}

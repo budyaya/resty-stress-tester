@@ -45,6 +45,7 @@ func (r *StressReporter) GenerateReport(result *types.StressResult) error {
 }
 
 // ConsoleReport 控制台报告
+// ConsoleReport 控制台报告
 func (r *StressReporter) ConsoleReport(result *types.StressResult) {
 	fmt.Println("\n" + strings.Repeat("=", 70))
 	fmt.Println("HTTP STRESS TEST REPORT")
@@ -75,6 +76,10 @@ func (r *StressReporter) ConsoleReport(result *types.StressResult) {
 		fmt.Printf("Avg Response Time:   %v\n", result.GetAverageResponseTime())
 		fmt.Printf("Min Response Time:   %v\n", result.MinResponseTime)
 		fmt.Printf("Max Response Time:   %v\n", result.MaxResponseTime)
+		// 新增分位数统计显示
+		fmt.Printf("P50 Response Time:   %v\n", result.P50ResponseTime)
+		fmt.Printf("P90 Response Time:   %v\n", result.P90ResponseTime)
+		fmt.Printf("P99 Response Time:   %v\n", result.P99ResponseTime)
 	}
 
 	// 状态码分布
@@ -162,6 +167,11 @@ func (r *StressReporter) generateJSONReport(result *types.StressResult) error {
 			"requests_per_second":   result.GetRequestsPerSecond(),
 			"success_rate":          result.GetSuccessRate(),
 			"average_response_time": result.GetAverageResponseTime().String(),
+			"min_response_time":     result.MinResponseTime.String(),
+			"max_response_time":     result.MaxResponseTime.String(),
+			"p50_response_time":     result.P50ResponseTime.String(),
+			"p90_response_time":     result.P90ResponseTime.String(),
+			"p99_response_time":     result.P99ResponseTime.String(),
 		},
 	}
 
