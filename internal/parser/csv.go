@@ -9,7 +9,8 @@ import (
 
 // CSVParser CSV 解析器
 type CSVParser struct {
-	data []map[string]string
+	data    []map[string]string
+	headers []string
 }
 
 // NewCSVParser 创建 CSV 解析器
@@ -37,7 +38,7 @@ func NewCSVParser(filename string) (*CSVParser, error) {
 
 	data := make([]map[string]string, 0, len(records)-1)
 	for i := 1; i < len(records); i++ {
-		row := make(map[string]string)
+		row := make(map[string]string, len(headers))
 		for j, header := range headers {
 			if j < len(records[i]) {
 				row[header] = strings.TrimSpace(records[i][j])
@@ -48,7 +49,10 @@ func NewCSVParser(filename string) (*CSVParser, error) {
 		data = append(data, row)
 	}
 
-	return &CSVParser{data: data}, nil
+	return &CSVParser{
+		data:    data,
+		headers: headers,
+	}, nil
 }
 
 // GetData 获取所有数据
@@ -71,13 +75,5 @@ func (p *CSVParser) RowCount() int {
 
 // Headers 获取列头
 func (p *CSVParser) Headers() []string {
-	if len(p.data) == 0 {
-		return nil
-	}
-
-	headers := make([]string, 0, len(p.data[0]))
-	for header := range p.data[0] {
-		headers = append(headers, header)
-	}
-	return headers
+	return p.headers
 }

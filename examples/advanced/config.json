@@ -10,7 +10,7 @@
     "X-User-Id": "{{user_id}}",
     "X-Category": "{{category}}"
   },
-  "csv_file": "users.csv",
+  "csv_file": "./examples/users.csv",
   "output_file": "results.json",
   "report_format": "json",
   "verbose": true

@@ -18,6 +18,12 @@ type RequestResult struct {
 	CSVData      interface{}   `json:"csv_data,omitempty"`
 }
 
+// ErrorItem 错误项
+type ErrorItem struct {
+	Error string
+	Count int64
+}
+
 // StressResult 压测结果统计
 type StressResult struct {
 	TotalRequests      int64         `json:"total_requests"`
@@ -32,25 +38,27 @@ type StressResult struct {
 	MaxResponseTime   time.Duration `json:"max_response_time"`
 	TotalResponseTime int64         `json:"-"` // 用于计算平均值
 
-	// 分位数统计 - 新增字段
+	// 分位数统计
 	P50ResponseTime time.Duration `json:"p50_response_time"`
 	P90ResponseTime time.Duration `json:"p90_response_time"`
 	P99ResponseTime time.Duration `json:"p99_response_time"`
 
-	// 分布统计
-	StatusCodes sync.Map `json:"status_codes"`
-	ErrorCounts sync.Map `json:"error_counts"`
+	// 分布统计 - 使用更高效的数据结构
+	statusCodes     map[int]int64
+	errorCounts     map[string]int64
+	statusCodesLock sync.RWMutex
+	errorCountsLock sync.RWMutex
 
 	// 详细请求记录
 	DetailedResults []*RequestResult `json:"detailed_results,omitempty"`
-	mu              sync.RWMutex
+	resultsLock     sync.RWMutex
 }
 
 // NewStressResult 创建新的结果统计器
 func NewStressResult() *StressResult {
 	return &StressResult{
-		StatusCodes:     sync.Map{},
-		ErrorCounts:     sync.Map{},
+		statusCodes:     make(map[int]int64),
+		errorCounts:     make(map[string]int64),
 		DetailedResults: make([]*RequestResult, 0),
 		MinResponseTime: time.Hour,
 	}
@@ -58,9 +66,6 @@ func NewStressResult() *StressResult {
 
 // AddResult 添加请求结果
 func (sr *StressResult) AddResult(result *RequestResult) {
-	sr.mu.Lock()
-	defer sr.mu.Unlock()
-
 	atomic.AddInt64(&sr.TotalRequests, 1)
 	atomic.AddInt64(&sr.TotalResponseTime, int64(result.Duration))
 
@@ -68,46 +73,90 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 		atomic.AddInt64(&sr.SuccessfulRequests, 1)
 
 		// 更新状态码统计
-		var count int64
-		if val, ok := sr.StatusCodes.Load(result.StatusCode); ok {
-			count = val.(int64)
-		}
-		sr.StatusCodes.Store(result.StatusCode, count+1)
+		sr.statusCodesLock.Lock()
+		sr.statusCodes[result.StatusCode]++
+		sr.statusCodesLock.Unlock()
 
 		// 更新响应时间统计
+		sr.resultsLock.Lock()
 		if result.Duration < sr.MinResponseTime {
 			sr.MinResponseTime = result.Duration
 		}
 		if result.Duration > sr.MaxResponseTime {
 			sr.MaxResponseTime = result.Duration
 		}
+		sr.resultsLock.Unlock()
 	} else {
 		atomic.AddInt64(&sr.FailedRequests, 1)
 
 		// 更新错误统计
-		var count int64
-		if val, ok := sr.ErrorCounts.Load(result.Error); ok {
-			count = val.(int64)
-		}
-		sr.ErrorCounts.Store(result.Error, count+1)
+		sr.errorCountsLock.Lock()
+		sr.errorCounts[result.Error]++
+		sr.errorCountsLock.Unlock()
 	}
 
 	// 记录详细结果
+	sr.resultsLock.Lock()
 	if len(sr.DetailedResults) < 10000 { // 限制内存使用
 		sr.DetailedResults = append(sr.DetailedResults, result)
 	}
+	sr.resultsLock.Unlock()
+}
+
+// GetSortedStatusCodes 获取排序后的状态码列表
+func (sr *StressResult) GetSortedStatusCodes() []int {
+	sr.statusCodesLock.RLock()
+	defer sr.statusCodesLock.RUnlock()
+
+	codes := make([]int, 0, len(sr.statusCodes))
+	for code := range sr.statusCodes {
+		codes = append(codes, code)
+	}
+	sort.Ints(codes)
+	return codes
+}
+
+// GetStatusCodeCount 获取状态码计数
+func (sr *StressResult) GetStatusCodeCount(code int) int64 {
+	sr.statusCodesLock.RLock()
+	defer sr.statusCodesLock.RUnlock()
+	return sr.statusCodes[code]
+}
+
+// GetSortedErrors 获取排序后的错误列表
+func (sr *StressResult) GetSortedErrors() ([]ErrorItem, int64) {
+	sr.errorCountsLock.RLock()
+	defer sr.errorCountsLock.RUnlock()
+
+	var totalErrors int64
+	errorList := make([]ErrorItem, 0, len(sr.errorCounts))
+
+	for errorMsg, count := range sr.errorCounts {
+		errorList = append(errorList, ErrorItem{Error: errorMsg, Count: count})
+		totalErrors += count
+	}
+
+	// 按错误数量排序
+	sort.Slice(errorList, func(i, j int) bool {
+		return errorList[i].Count > errorList[j].Count
+	})
+
+	return errorList, totalErrors
 }
 
 // CalculateMetrics 计算最终指标
 func (sr *StressResult) CalculateMetrics() {
 	sr.TotalDuration = sr.EndTime.Sub(sr.StartTime)
 
-	// 计算分位数 - 新增功能
+	// 计算分位数
 	sr.calculatePercentiles()
 }
 
-// calculatePercentiles 计算响应时间分位数 - 新增方法
+// calculatePercentiles 计算响应时间分位数
 func (sr *StressResult) calculatePercentiles() {
+	sr.resultsLock.RLock()
+	defer sr.resultsLock.RUnlock()
+
 	if len(sr.DetailedResults) == 0 {
 		return
 	}
@@ -135,7 +184,7 @@ func (sr *StressResult) calculatePercentiles() {
 	sr.P99ResponseTime = calculatePercentile(responseTimes, 0.99)
 }
 
-// calculatePercentile 计算分位数 - 新增函数
+// calculatePercentile 计算分位数
 func calculatePercentile(sortedData []time.Duration, percentile float64) time.Duration {
 	if len(sortedData) == 0 {
 		return 0
@@ -184,4 +233,18 @@ func (sr *StressResult) GetSuccessRate() float64 {
 		return 0
 	}
 	return float64(sr.SuccessfulRequests) / float64(sr.TotalRequests) * 100
+}
+
+// GetMinResponseTime 获取最小响应时间
+func (sr *StressResult) GetMinResponseTime() time.Duration {
+	sr.resultsLock.RLock()
+	defer sr.resultsLock.RUnlock()
+	return sr.MinResponseTime
+}
+
+// GetMaxResponseTime 获取最大响应时间
+func (sr *StressResult) GetMaxResponseTime() time.Duration {
+	sr.resultsLock.RLock()
+	defer sr.resultsLock.RUnlock()
+	return sr.MaxResponseTime
 }

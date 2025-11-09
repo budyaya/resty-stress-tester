@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type Logger struct {
 	verbose bool
 	logger  *log.Logger
 	file    *os.File
+	mu      sync.Mutex
 }
 
 // NewLogger 创建日志记录器
@@ -42,18 +44,24 @@ func NewLogger(verbose bool, logFile string) (*Logger, error) {
 
 // Info 记录信息日志
 func (l *Logger) Info(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.logger.Printf("[INFO] "+format, args...)
 }
 
 // Debug 记录调试日志
 func (l *Logger) Debug(format string, args ...interface{}) {
 	if l.verbose {
+		l.mu.Lock()
+		defer l.mu.Unlock()
 		l.logger.Printf("[DEBUG] "+format, args...)
 	}
 }
 
 // Error 记录错误日志
 func (l *Logger) Error(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.logger.Printf("[ERROR] "+format, args...)
 }
 
@@ -67,12 +75,15 @@ func (l *Logger) Progress(current, total int64, startTime time.Time) {
 	percent := float64(current) / float64(total) * 100
 	rps := float64(current) / elapsed.Seconds()
 
-	fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec",
-		current, total, percent, rps)
+	fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Elapsed: %v",
+		current, total, percent, rps, elapsed.Round(time.Second))
 }
 
 // Close 关闭日志记录器
 func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.file != nil {
 		return l.file.Close()
 	}

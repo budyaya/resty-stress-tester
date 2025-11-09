@@ -70,7 +70,7 @@ func (w *Worker) makeRequest() {
 	}
 
 	// 构建请求
-	req := w.client.R()
+	req := w.client.R().SetContext(w.ctx)
 
 	// 处理 URL
 	url := w.tmplParser.ProcessURL(w.config.URL, csvData)

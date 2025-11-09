@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ type StressEngine struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	startTime  time.Time
+	stopped    int32
 }
 
 // NewStressEngine 创建压测引擎
@@ -43,10 +45,19 @@ func NewStressEngine(cfg *config.Config) (*StressEngine, error) {
 	}
 
 	// 配置 TLS
-	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+	client.SetTLSClientConfig(&tls.Config{
+		InsecureSkipVerify: true,
+	})
 
 	// 设置重试策略
 	client.SetRetryCount(0)
+
+	// 优化连接池
+	client.SetTransport(&http.Transport{
+		MaxIdleConns:        cfg.Concurrency * 2,
+		MaxIdleConnsPerHost: cfg.Concurrency,
+		IdleConnTimeout:     90 * time.Second,
+	})
 
 	// 创建 CSV 解析器
 	var csvParser *parser.CSVParser
@@ -128,9 +139,10 @@ func (e *StressEngine) Run() *types.StressResult {
 
 // startWorkers 启动工作协程
 func (e *StressEngine) startWorkers() {
-	requests := make(chan struct{}, e.config.Concurrency)
+	// 使用缓冲channel提高性能
+	requests := make(chan struct{}, e.config.Concurrency*2)
 
-	// 创建工作协程
+	// 预创建工作协程
 	for i := 0; i < e.config.Concurrency; i++ {
 		worker := NewWorker(e.config, e.client, e.csvParser, e.tmplParser, e.result, e.ctx)
 		e.workers = append(e.workers, worker)
@@ -166,6 +178,9 @@ func (e *StressEngine) sendRequests(requests chan<- struct{}) {
 				case requests <- struct{}{}:
 				case <-e.ctx.Done():
 					return
+				default:
+					// 如果channel满了，短暂等待
+					time.Sleep(10 * time.Microsecond)
 				}
 			}
 		}
@@ -191,11 +206,19 @@ func (e *StressEngine) monitorProgress() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	var lastCount int64
+	var lastTime time.Time
+
 	for {
 		select {
 		case <-ticker.C:
+			if atomic.LoadInt32(&e.stopped) == 1 {
+				return
+			}
+
 			current := atomic.LoadInt64(&e.result.TotalRequests)
-			elapsed := time.Since(e.startTime)
+			now := time.Now()
+			elapsed := now.Sub(e.startTime)
 
 			if e.config.IsDurationBased() {
 				remaining := e.config.Duration - elapsed
@@ -206,6 +229,14 @@ func (e *StressEngine) monitorProgress() {
 			} else {
 				total := int64(e.config.TotalRequests)
 				e.logger.Progress(current, total, e.startTime)
+
+				// 计算瞬时RPS
+				if !lastTime.IsZero() {
+					instantRPS := float64(current-lastCount) / now.Sub(lastTime).Seconds()
+					e.logger.Debug("Instant RPS: %.1f", instantRPS)
+				}
+				lastCount = current
+				lastTime = now
 			}
 
 		case <-e.ctx.Done():
@@ -216,9 +247,11 @@ func (e *StressEngine) monitorProgress() {
 
 // Stop 停止压测
 func (e *StressEngine) Stop() {
-	e.logger.Info("Stopping stress test...")
-	if e.cancel != nil {
-		e.cancel()
+	if atomic.CompareAndSwapInt32(&e.stopped, 0, 1) {
+		e.logger.Info("Stopping stress test...")
+		if e.cancel != nil {
+			e.cancel()
+		}
 	}
 }
 
@@ -234,5 +267,6 @@ func (e *StressEngine) PrintReport() {
 
 // Cleanup 清理资源
 func (e *StressEngine) Cleanup() {
+	e.Stop()
 	e.logger.Close()
 }
