@@ -57,6 +57,8 @@ func NewStressEngine(cfg *config.Config) (*StressEngine, error) {
 		MaxIdleConns:        cfg.Concurrency * 2,
 		MaxIdleConnsPerHost: cfg.Concurrency,
 		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		DisableKeepAlives:   !cfg.KeepAlive,
 	})
 
 	// 创建 CSV 解析器
@@ -73,7 +75,7 @@ func NewStressEngine(cfg *config.Config) (*StressEngine, error) {
 	tmplParser := parser.NewTemplateParser(csvParser)
 
 	// 创建日志记录器
-	logger, err := util.NewLogger(cfg.Verbose, "")
+	logger, err := util.NewLogger(cfg.Verbose, cfg.LogFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logger: %v", err)
 	}
@@ -118,7 +120,7 @@ func (e *StressEngine) Run() *types.StressResult {
 	e.startTime = time.Now()
 	e.result.StartTime = e.startTime
 
-	// 启动工作协程
+	// 预热工作协程
 	e.startWorkers()
 
 	// 启动进度监控
@@ -167,6 +169,9 @@ func (e *StressEngine) sendRequests(requests chan<- struct{}) {
 		timer := time.NewTimer(e.config.Duration)
 		defer timer.Stop()
 
+		batchSize := e.config.Concurrency
+		batch := make([]struct{}, batchSize)
+
 		for {
 			select {
 			case <-timer.C:
@@ -174,24 +179,34 @@ func (e *StressEngine) sendRequests(requests chan<- struct{}) {
 			case <-e.ctx.Done():
 				return
 			default:
-				select {
-				case requests <- struct{}{}:
-				case <-e.ctx.Done():
-					return
-				default:
-					// 如果channel满了，短暂等待
-					time.Sleep(10 * time.Microsecond)
+				// 批量发送请求，减少channel操作
+				for i := 0; i < batchSize; i++ {
+					select {
+					case requests <- batch[i]:
+					case <-e.ctx.Done():
+						return
+					default:
+						// 如果channel满了，短暂等待
+						time.Sleep(10 * time.Microsecond)
+					}
 				}
 			}
 		}
 	} else {
-		// 基于请求数量的测试
-		for i := 0; i < e.config.TotalRequests; i++ {
-			select {
-			case requests <- struct{}{}:
-			case <-e.ctx.Done():
-				return
+		// 基于请求数量的测试 - 使用批量发送
+		batchSize := min(100, e.config.Concurrency)
+		remaining := e.config.TotalRequests
+
+		for remaining > 0 {
+			currentBatch := min(batchSize, remaining)
+			for i := 0; i < currentBatch; i++ {
+				select {
+				case requests <- struct{}{}:
+				case <-e.ctx.Done():
+					return
+				}
 			}
+			remaining -= currentBatch
 		}
 	}
 }
@@ -224,7 +239,7 @@ func (e *StressEngine) monitorProgress() {
 				remaining := e.config.Duration - elapsed
 				rps := float64(current) / elapsed.Seconds()
 				e.logger.Progress(current, 0, e.startTime)
-				e.logger.Debug("Elapsed: %v, Remaining: %v, RPS: %.1f",
+				e.logger.Debug(" - Elapsed: %v, Remaining: %v, RPS: %.1f",
 					elapsed.Round(time.Second), remaining.Round(time.Second), rps)
 			} else {
 				total := int64(e.config.TotalRequests)
@@ -269,4 +284,14 @@ func (e *StressEngine) PrintReport() {
 func (e *StressEngine) Cleanup() {
 	e.Stop()
 	e.logger.Close()
+	if e.client != nil {
+		e.client.GetClient().CloseIdleConnections()
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

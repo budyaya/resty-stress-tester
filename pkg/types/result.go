@@ -49,9 +49,11 @@ type StressResult struct {
 	statusCodesLock sync.RWMutex
 	errorCountsLock sync.RWMutex
 
-	// 详细请求记录
+	// 详细请求记录 - 使用环形缓冲区避免内存无限增长
 	DetailedResults []*RequestResult `json:"detailed_results,omitempty"`
 	resultsLock     sync.RWMutex
+	resultIndex     int
+	maxResults      int
 }
 
 // NewStressResult 创建新的结果统计器
@@ -59,8 +61,9 @@ func NewStressResult() *StressResult {
 	return &StressResult{
 		statusCodes:     make(map[int]int64),
 		errorCounts:     make(map[string]int64),
-		DetailedResults: make([]*RequestResult, 0),
+		DetailedResults: make([]*RequestResult, 0, 1000), // 预分配容量
 		MinResponseTime: time.Hour,
+		maxResults:      10000, // 限制最大记录数
 	}
 }
 
@@ -79,7 +82,7 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 
 		// 更新响应时间统计
 		sr.resultsLock.Lock()
-		if result.Duration < sr.MinResponseTime {
+		if result.Duration < sr.MinResponseTime || sr.MinResponseTime == time.Hour {
 			sr.MinResponseTime = result.Duration
 		}
 		if result.Duration > sr.MaxResponseTime {
@@ -95,12 +98,18 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 		sr.errorCountsLock.Unlock()
 	}
 
-	// 记录详细结果
+	// 记录详细结果（使用环形缓冲区逻辑）
 	sr.resultsLock.Lock()
-	if len(sr.DetailedResults) < 10000 { // 限制内存使用
+	defer sr.resultsLock.Unlock()
+
+	if len(sr.DetailedResults) < sr.maxResults {
+		// 如果还有空间，直接追加
 		sr.DetailedResults = append(sr.DetailedResults, result)
+	} else {
+		// 使用环形缓冲区覆盖最旧的结果
+		sr.DetailedResults[sr.resultIndex] = result
+		sr.resultIndex = (sr.resultIndex + 1) % sr.maxResults
 	}
-	sr.resultsLock.Unlock()
 }
 
 // GetSortedStatusCodes 获取排序后的状态码列表
@@ -173,6 +182,16 @@ func (sr *StressResult) calculatePercentiles() {
 		return
 	}
 
+	// 如果数据量很大，使用采样来加速计算
+	if len(responseTimes) > 10000 {
+		sampled := make([]time.Duration, 10000)
+		step := len(responseTimes) / 10000
+		for i := 0; i < 10000; i++ {
+			sampled[i] = responseTimes[i*step]
+		}
+		responseTimes = sampled
+	}
+
 	// 排序响应时间
 	sort.Slice(responseTimes, func(i, j int) bool {
 		return responseTimes[i] < responseTimes[j]
@@ -239,6 +258,9 @@ func (sr *StressResult) GetSuccessRate() float64 {
 func (sr *StressResult) GetMinResponseTime() time.Duration {
 	sr.resultsLock.RLock()
 	defer sr.resultsLock.RUnlock()
+	if sr.MinResponseTime == time.Hour {
+		return 0
+	}
 	return sr.MinResponseTime
 }
 
@@ -247,4 +269,16 @@ func (sr *StressResult) GetMaxResponseTime() time.Duration {
 	sr.resultsLock.RLock()
 	defer sr.resultsLock.RUnlock()
 	return sr.MaxResponseTime
+}
+
+// SetMaxResults 设置最大结果记录数
+func (sr *StressResult) SetMaxResults(max int) {
+	sr.resultsLock.Lock()
+	defer sr.resultsLock.Unlock()
+	sr.maxResults = max
+	// 如果当前结果数超过新的最大值，截断
+	if len(sr.DetailedResults) > max {
+		sr.DetailedResults = sr.DetailedResults[:max]
+		sr.resultIndex = 0
+	}
 }

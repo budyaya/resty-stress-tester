@@ -18,6 +18,7 @@ type StressConfig struct {
 	CSVFile       string            `mapstructure:"csv_file" json:"csv_file" yaml:"csv_file"`
 	OutputFile    string            `mapstructure:"output_file" json:"output_file" yaml:"output_file"`
 	Verbose       bool              `mapstructure:"verbose" json:"verbose" yaml:"verbose"`
+	LogFile       string            `mapstructure:"log_file" json:"log_file" yaml:"log_file"`
 	ReportFormat  string            `mapstructure:"report_format" json:"report_format" yaml:"report_format"`
 }
 

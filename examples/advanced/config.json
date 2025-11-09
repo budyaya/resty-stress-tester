@@ -1,7 +1,7 @@
 {
   "url": "https://api.example.com/users/{{user_id}}",
   "method": "GET",
-  "total_requests": 5000,
+  "total_requests": 1000,
   "concurrency": 50,
   "timeout": "30s",
   "headers": {
@@ -13,5 +13,6 @@
   "csv_file": "./examples/users.csv",
   "output_file": "results.json",
   "report_format": "json",
-  "verbose": true
+  "verbose": true,
+  "log_file": "stress.log"
 }

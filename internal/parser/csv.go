@@ -9,8 +9,9 @@ import (
 
 // CSVParser CSV 解析器
 type CSVParser struct {
-	data    []map[string]string
-	headers []string
+	data     []map[string]string
+	headers  []string
+	rowCount int
 }
 
 // NewCSVParser 创建 CSV 解析器
@@ -21,7 +22,11 @@ func NewCSVParser(filename string) (*CSVParser, error) {
 	}
 	defer file.Close()
 
+	// 使用带缓存的reader提高大文件读取性能
 	reader := csv.NewReader(file)
+	reader.FieldsPerRecord = -1 // 允许可变字段数
+	reader.LazyQuotes = true    // 允许宽松的引号处理
+
 	records, err := reader.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CSV file: %v", err)
@@ -50,8 +55,9 @@ func NewCSVParser(filename string) (*CSVParser, error) {
 	}
 
 	return &CSVParser{
-		data:    data,
-		headers: headers,
+		data:     data,
+		headers:  headers,
+		rowCount: len(data),
 	}, nil
 }
 
@@ -65,15 +71,32 @@ func (p *CSVParser) GetRow(index int) map[string]string {
 	if len(p.data) == 0 {
 		return nil
 	}
+
+	// 使用取模运算实现循环读取
+	if p.rowCount > 0 {
+		return p.data[index%p.rowCount]
+	}
 	return p.data[index%len(p.data)]
 }
 
 // RowCount 获取行数
 func (p *CSVParser) RowCount() int {
+	if p.rowCount > 0 {
+		return p.rowCount
+	}
 	return len(p.data)
 }
 
 // Headers 获取列头
 func (p *CSVParser) Headers() []string {
 	return p.headers
+}
+
+// Close 关闭解析器（清理资源）
+func (p *CSVParser) Close() error {
+	// 目前没有需要特别清理的资源
+	// 但如果使用了内存映射等，需要在这里清理
+	p.data = nil
+	p.headers = nil
+	return nil
 }

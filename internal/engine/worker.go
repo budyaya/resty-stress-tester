@@ -22,6 +22,8 @@ type Worker struct {
 	result     *types.StressResult
 	ctx        context.Context
 	requestID  int64
+	// 复用请求对象减少分配
+	baseRequest *resty.Request
 }
 
 // NewWorker 创建工作协程
@@ -33,7 +35,7 @@ func NewWorker(
 	result *types.StressResult,
 	ctx context.Context,
 ) *Worker {
-	return &Worker{
+	worker := &Worker{
 		config:     cfg,
 		client:     client,
 		csvParser:  csvParser,
@@ -41,6 +43,11 @@ func NewWorker(
 		result:     result,
 		ctx:        ctx,
 	}
+
+	// 预创建基础请求对象
+	worker.baseRequest = client.R().SetContext(ctx)
+
+	return worker
 }
 
 // Run 运行工作协程
@@ -69,8 +76,8 @@ func (w *Worker) makeRequest() {
 		csvData = w.csvParser.GetRow(int(requestID - 1))
 	}
 
-	// 构建请求
-	req := w.client.R().SetContext(w.ctx)
+	// 复用基础请求对象
+	req := w.baseRequest
 
 	// 处理 URL
 	url := w.tmplParser.ProcessURL(w.config.URL, csvData)
@@ -79,6 +86,9 @@ func (w *Worker) makeRequest() {
 	if len(w.config.Headers) > 0 {
 		headers := w.tmplParser.ProcessHeaders(w.config.Headers, csvData)
 		req.SetHeaders(headers)
+	} else {
+		// 清除可能存在的headers
+		req.Header = make(map[string][]string)
 	}
 
 	// 处理请求体
@@ -89,6 +99,8 @@ func (w *Worker) makeRequest() {
 			return
 		}
 		req.SetBody(body)
+	} else {
+		req.SetBody(nil)
 	}
 
 	// 发送请求
@@ -137,7 +149,17 @@ func (w *Worker) recordResult(resp *resty.Response, err error, duration time.Dur
 		// 检查 HTTP 错误状态码
 		if resp.StatusCode() >= 400 {
 			result.Success = false
-			result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode(), resp.Status())
+			// 对于HTTP错误，提供更详细的错误信息
+			if len(resp.Body()) > 0 {
+				// 截断过长的响应体
+				body := string(resp.Body())
+				if len(body) > 200 {
+					body = body[:200] + "..."
+				}
+				result.Error = fmt.Sprintf("HTTP %d: %s - %s", resp.StatusCode(), resp.Status(), body)
+			} else {
+				result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode(), resp.Status())
+			}
 		}
 	}
 
