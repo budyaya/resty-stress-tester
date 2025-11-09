@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,11 +23,12 @@ const (
 
 // Logger 日志记录器
 type Logger struct {
-	verbose bool
-	logger  *log.Logger
-	file    *os.File
-	writer  *bufio.Writer
-	mu      sync.RWMutex
+	verbose        bool
+	logger         *log.Logger
+	file           *os.File
+	writer         *bufio.Writer
+	mu             sync.RWMutex
+	lastLineLength int
 
 	// 文件轮转相关
 	logFilePath string
@@ -260,13 +262,24 @@ func (l *Logger) Progress(current, total int64, startTime time.Time, instantRPS 
 	percent := float64(current) / float64(total) * 100
 	rps := float64(current) / elapsed.Seconds()
 
-	// 进度信息直接输出到标准输出，避免异步延迟
+	// 构建固定格式的进度信息
+	var progressStr string
 	if remaining <= 0 {
-		fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Instant: %.1f req/sec - Elapsed: %v",
+		progressStr = fmt.Sprintf("\rProgress: %d/%d (%5.1f%%) - %6.1f req/sec - Instant: %6.1f req/sec - Elapsed: %v",
 			current, total, percent, rps, instantRPS, elapsed.Round(time.Second))
 	} else {
-		fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Elapsed: %v - Remaining: %v",
+		progressStr = fmt.Sprintf("\rProgress: %d/%d (%5.1f%%) - %6.1f req/sec - Elapsed: %v - Remaining: %v",
 			current, total, percent, rps, elapsed.Round(time.Second), remaining.Round(time.Second))
+	}
+
+	// 清理行尾并输出
+	fmt.Print(progressStr + strings.Repeat(" ", max(0, l.lastLineLength-len(progressStr))))
+	l.lastLineLength = len(progressStr)
+
+	// 完成后换行
+	if current >= total {
+		fmt.Println()
+		l.lastLineLength = 0
 	}
 }
 
