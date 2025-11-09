@@ -79,16 +79,6 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 		sr.statusCodesLock.Lock()
 		sr.statusCodes[result.StatusCode]++
 		sr.statusCodesLock.Unlock()
-
-		// 更新响应时间统计
-		sr.resultsLock.Lock()
-		if result.Duration < sr.MinResponseTime || sr.MinResponseTime == time.Hour {
-			sr.MinResponseTime = result.Duration
-		}
-		if result.Duration > sr.MaxResponseTime {
-			sr.MaxResponseTime = result.Duration
-		}
-		sr.resultsLock.Unlock()
 	} else {
 		atomic.AddInt64(&sr.FailedRequests, 1)
 
@@ -98,10 +88,18 @@ func (sr *StressResult) AddResult(result *RequestResult) {
 		sr.errorCountsLock.Unlock()
 	}
 
-	// 记录详细结果（使用环形缓冲区逻辑）
 	sr.resultsLock.Lock()
 	defer sr.resultsLock.Unlock()
 
+	// 更新响应时间统计
+	if result.Duration < sr.MinResponseTime || sr.MinResponseTime == time.Hour {
+		sr.MinResponseTime = result.Duration
+	}
+	if result.Duration > sr.MaxResponseTime {
+		sr.MaxResponseTime = result.Duration
+	}
+
+	// 记录详细结果（使用环形缓冲区逻辑）
 	if len(sr.DetailedResults) < sr.maxResults {
 		// 如果还有空间，直接追加
 		sr.DetailedResults = append(sr.DetailedResults, result)

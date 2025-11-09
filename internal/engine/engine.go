@@ -237,19 +237,17 @@ func (e *StressEngine) monitorProgress() {
 
 			if e.config.IsDurationBased() {
 				remaining := e.config.Duration - elapsed
-				rps := float64(current) / elapsed.Seconds()
-				e.logger.Progress(current, 0, e.startTime)
-				e.logger.Debug(" - Elapsed: %v, Remaining: %v, RPS: %.1f",
-					elapsed.Round(time.Second), remaining.Round(time.Second), rps)
+				e.logger.Progress(current, 0, e.startTime, 0, remaining)
 			} else {
-				total := int64(e.config.TotalRequests)
-				e.logger.Progress(current, total, e.startTime)
-
 				// 计算瞬时RPS
+				var instantRPS float64
 				if !lastTime.IsZero() {
-					instantRPS := float64(current-lastCount) / now.Sub(lastTime).Seconds()
-					e.logger.Debug("Instant RPS: %.1f", instantRPS)
+					instantRPS = float64(current-lastCount) / now.Sub(lastTime).Seconds()
 				}
+
+				total := int64(e.config.TotalRequests)
+				e.logger.Progress(current, total, e.startTime, instantRPS, 0)
+
 				lastCount = current
 				lastTime = now
 			}

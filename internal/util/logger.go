@@ -251,7 +251,7 @@ func (l *Logger) Error(format string, args ...interface{}) {
 }
 
 // Progress 显示进度
-func (l *Logger) Progress(current, total int64, startTime time.Time) {
+func (l *Logger) Progress(current, total int64, startTime time.Time, instantRPS float64, remaining time.Duration) {
 	if !l.verbose {
 		return
 	}
@@ -261,8 +261,13 @@ func (l *Logger) Progress(current, total int64, startTime time.Time) {
 	rps := float64(current) / elapsed.Seconds()
 
 	// 进度信息直接输出到标准输出，避免异步延迟
-	fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Elapsed: %v",
-		current, total, percent, rps, elapsed.Round(time.Second))
+	if remaining <= 0 {
+		fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Instant: %.1f req/sec - Elapsed: %v",
+			current, total, percent, rps, instantRPS, elapsed.Round(time.Second))
+	} else {
+		fmt.Printf("\rProgress: %d/%d (%.1f%%) - %.1f req/sec - Elapsed: %v - Remaining: %v",
+			current, total, percent, rps, elapsed.Round(time.Second), remaining.Round(time.Second))
+	}
 }
 
 // Close 关闭日志记录器

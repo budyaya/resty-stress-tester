@@ -1,9 +1,9 @@
 {
   "url": "https://api.example.com/users/{{user_id}}",
   "method": "GET",
-  "total_requests": 1000,
+  "total_requests": 2000,
   "concurrency": 50,
-  "timeout": "30s",
+  "timeout": "10s",
   "headers": {
     "Content-Type": "application/json",
     "Authorization": "Bearer token_{{user_id}}",
